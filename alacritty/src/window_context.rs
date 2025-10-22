@@ -388,13 +388,21 @@ impl WindowContext {
 
         // Redraw the window.
         let terminal = self.terminal.lock();
-        self.display.draw(
+        let animation_active = self.display.draw(
             terminal,
             scheduler,
             &self.message_buffer,
             &self.config,
             &mut self.search_state,
         );
+        
+        if animation_active {
+            if self.display.is_wayland() {
+                self.display.window.request_redraw();
+            } else {
+                self.dirty = true;
+            }
+        }
     }
 
     /// Process events for this terminal window.

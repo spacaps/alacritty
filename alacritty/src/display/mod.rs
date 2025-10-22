@@ -44,6 +44,7 @@ use crate::config::window::Dimensions;
 use crate::config::window::StartupMode;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
+use crate::display::background::BackgroundAnimation;
 use crate::display::content::{RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
 use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
@@ -63,6 +64,7 @@ pub mod cursor;
 pub mod hint;
 pub mod window;
 
+mod background;
 mod bell;
 mod damage;
 mod meter;
@@ -363,7 +365,8 @@ pub struct Display {
 
     /// Mapped RGB values for each terminal color.
     pub colors: List,
-
+    
+    background_animation: BackgroundAnimation,
     /// State of the keyboard hints.
     pub hint_state: HintState,
 
@@ -521,6 +524,7 @@ impl Display {
             renderer_preference: config.debug.renderer,
             surface: ManuallyDrop::new(surface),
             colors: List::from(&config.colors),
+            background_animation: BackgroundAnimation::new(&size_info),
             frame_timer: FrameTimer::new(),
             raw_window_handle,
             damage_tracker,
@@ -602,6 +606,11 @@ impl Display {
         self.damage_tracker.frame().mark_fully_damaged();
 
         debug!("Recovered window {:?} from gpu reset", self.window.id());
+    }
+
+    #[inline]
+    pub fn is_wayland(&self) -> bool {
+        matches!(self.raw_window_handle, RawWindowHandle::Wayland(_))
     }
 
     fn swap_buffers(&self) {
@@ -734,6 +743,7 @@ impl Display {
             search_state.clear_focused_match();
         }
         self.size_info = new_size;
+        self.background_animation.on_resize(&self.size_info);
     }
 
     // NOTE: Renderer updates are split off, since platforms like Wayland require resize and other
@@ -779,7 +789,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
-    ) {
+    ) -> bool {
         // Collect renderable content before the terminal is dropped.
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
         let mut grid_cells = Vec::new();
@@ -796,7 +806,19 @@ impl Display {
         let total_lines = terminal.grid().total_lines();
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
-
+        let now = Instant::now();
+        let mut animation_active = self.background_animation.is_active(&self.size_info);
+        if let Some((old_point, new_point)) = self.background_animation.update(now, &self.size_info)
+        {
+            if let Some(old_point) = old_point {
+                self.damage_tracker.frame().damage_point(old_point);
+            }
+            self.damage_tracker.frame().damage_point(new_point);
+            animation_active = true;
+        }
+        let background_cell = self.background_animation.render_cell(&self.colors, &self.size_info);
+        animation_active |= background_cell.is_some();
+        
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
 
@@ -855,8 +877,13 @@ impl Display {
             let vi_highlighted_hint = &self.vi_highlighted_hint;
             let damage_tracker = &mut self.damage_tracker;
 
-            let cells = grid_cells.into_iter().map(|mut cell| {
-                // Underline hints hovered by mouse or vi mode cursor.
+            let mut render_cells =
+                Vec::with_capacity(grid_cells.len() + usize::from(background_cell.is_some()));
+            if let Some(animated_cell) = background_cell {
+                render_cells.push(animated_cell);
+            }
+
+            for mut cell in grid_cells {
                 if has_highlighted_hint {
                     let point = term::viewport_to_point(display_offset, cell.point);
                     let hyperlink = cell.extra.as_ref().and_then(|extra| extra.hyperlink.as_ref());
@@ -870,12 +897,9 @@ impl Display {
                     }
                 }
 
-                // Update underline/strikeout.
-                lines.update(&cell);
-
-                cell
-            });
-            self.renderer.draw_cells(&size_info, glyph_cache, cells);
+                render_cells.push(cell);
+            }
+            self.renderer.draw_cells(&size_info, glyph_cache, render_cells.into_iter());
         }
 
         let mut rects = lines.rects(&metrics, &size_info);
@@ -1044,6 +1068,7 @@ impl Display {
         }
 
         self.damage_tracker.swap_damage();
+        animation_active
     }
 
     /// Update to a new configuration.

@@ -1,0 +1,15 @@
+[package]
+name = "ascii_cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "CLI for rendering images and animations to ASCII"
+authors = ["Alacritty Contributors"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+ascii_render = { path = "../ascii_render" }
+image = { version = "0.24", features = ["png", "jpeg", "gif", "bmp", "ico", "pnm", "tiff", "webp"] }
+indicatif = "0.17"
+walkdir = "2.4"

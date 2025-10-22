@@ -1,0 +1,12 @@
+[package]
+name = "ascii_render"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Image and animation frame to ASCII glyph renderer"
+authors = ["Alacritty Contributors"]
+
+[dependencies]
+image = { version = "0.24", features = ["png", "jpeg", "gif", "bmp", "ico", "pnm", "tiff", "webp"] }
+thiserror = "1.0"
+rand = { version = "0.8", features = ["std"] }

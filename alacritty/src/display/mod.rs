@@ -365,7 +365,7 @@ pub struct Display {
 
     /// Mapped RGB values for each terminal color.
     pub colors: List,
-    
+
     background_animation: BackgroundAnimation,
     /// State of the keyboard hints.
     pub hint_state: HintState,
@@ -807,18 +807,19 @@ impl Display {
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
         let now = Instant::now();
+        let mut background_cells = Vec::new();
         let mut animation_active = self.background_animation.is_active(&self.size_info);
-        if let Some((old_point, new_point)) = self.background_animation.update(now, &self.size_info)
-        {
-            if let Some(old_point) = old_point {
-                self.damage_tracker.frame().damage_point(old_point);
-            }
-            self.damage_tracker.frame().damage_point(new_point);
+        if self.background_animation.update(now, &self.size_info) {
+            self.damage_tracker.frame().mark_fully_damaged();
             animation_active = true;
         }
-        let background_cell = self.background_animation.render_cell(&self.colors, &self.size_info);
-        animation_active |= background_cell.is_some();
-        
+        self.background_animation.render_cells(
+            &self.colors,
+            &self.size_info,
+            &mut background_cells,
+        );
+        animation_active |= !background_cells.is_empty();
+
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
 
@@ -877,11 +878,8 @@ impl Display {
             let vi_highlighted_hint = &self.vi_highlighted_hint;
             let damage_tracker = &mut self.damage_tracker;
 
-            let mut render_cells =
-                Vec::with_capacity(grid_cells.len() + usize::from(background_cell.is_some()));
-            if let Some(animated_cell) = background_cell {
-                render_cells.push(animated_cell);
-            }
+            let mut render_cells = Vec::with_capacity(grid_cells.len() + background_cells.len());
+            render_cells.extend(background_cells.into_iter());
 
             for mut cell in grid_cells {
                 if has_highlighted_hint {

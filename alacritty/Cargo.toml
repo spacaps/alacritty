@@ -24,6 +24,7 @@ version = "0.2.4-dev"
 
 [dependencies]
 ahash = { version = "0.8.6", features = ["no-rng"] }
+ascii_render = { path = "../ascii-pipeline/crates/ascii_render" }
 bitflags = "2.2.1"
 clap = { version = "4.2.7", features = ["derive", "env"] }
 copypasta = { version = "0.10.1", default-features = false }

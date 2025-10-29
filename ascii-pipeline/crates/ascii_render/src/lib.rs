@@ -7,16 +7,17 @@ use image::{DynamicImage, GenericImageView};
 
 pub use ascii::{
     gradient::Gradient,
-    grid::{CellGlyph, GlyphGrid},
+    grid::{CellGlyph, GlyphFrameSeries, GlyphGrid},
     mapping::GlyphMapper,
+    series::{GlyphGridFrame, GlyphGridSeries},
 };
 pub use image_pipeline::{
     edges::{EdgeMode, EdgeSample},
     loader::FrameSource,
-    resize::LayoutPolicy,
+    resize::{LayoutPolicy, TargetGeometry},
 };
 
-use image_pipeline::{adjust, edges, resize::TargetGeometry};
+use image_pipeline::{adjust, edges};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AsciiError {

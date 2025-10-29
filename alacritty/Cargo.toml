@@ -43,6 +43,8 @@ toml.workspace = true
 toml_edit.workspace = true
 unicode-width = "0.2.0"
 winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "serde"] }
+rand = { version = "0.8", features = ["std"] }
+image = { version = "0.24", features = ["gif"] }
 
 [build-dependencies]
 gl_generator = "0.14.0"

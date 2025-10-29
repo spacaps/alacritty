@@ -261,7 +261,6 @@ impl GradientPreset {
     }
 }
 
-
 impl EdgeChoice {
     fn to_mode(self, settings: &RenderSettings) -> EdgeMode {
         match self {

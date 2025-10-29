@@ -5,18 +5,21 @@ use std::path::Path;
 
 use image::{DynamicImage, GenericImageView};
 
+const TRANSPARENT_ALPHA_THRESHOLD: f32 = 0.001;
+
 pub use ascii::{
     gradient::Gradient,
-    grid::{CellGlyph, GlyphGrid},
+    grid::{CellGlyph, GlyphFrameSeries, GlyphGrid},
     mapping::GlyphMapper,
+    series::{GlyphGridFrame, GlyphGridSeries},
 };
 pub use image_pipeline::{
     edges::{EdgeMode, EdgeSample},
     loader::FrameSource,
-    resize::LayoutPolicy,
+    resize::{LayoutPolicy, TargetGeometry},
 };
 
-use image_pipeline::{adjust, edges, resize::TargetGeometry};
+use image_pipeline::{adjust, edges};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AsciiError {
@@ -43,12 +46,12 @@ pub struct AsciiOptions {
 impl Default for AsciiOptions {
     fn default() -> Self {
         Self {
-            gradient: Gradient::detailed(),
+            gradient: Gradient::blocks(),
             invert: false,
             brightness: 0.0,
             contrast: 0.0,
             font_aspect: 0.55,
-            edge_mode: EdgeMode::None,
+            edge_mode: EdgeMode::Sobel { threshold: 0.1 },
         }
     }
 }
@@ -77,11 +80,10 @@ impl AsciiRenderer {
 
     pub fn render_image(
         &self,
-        mut image: DynamicImage,
+        image: DynamicImage,
         layout: LayoutPolicy,
         options: AsciiOptions,
     ) -> Result<RenderOutput, AsciiError> {
-
         let (width, height) = image.dimensions();
         let geometry =
             layout.derive(width, height, options.font_aspect).ok_or(AsciiError::InvalidLayout)?;
@@ -91,6 +93,9 @@ impl AsciiRenderer {
             geometry.rows as u32,
             image::imageops::FilterType::CatmullRom,
         );
+
+        let rgba = resized.to_rgba8();
+        let pixel_data = rgba.into_raw();
 
         let mut luminance = adjust::extract_luma(&resized, options.invert);
         adjust::apply_contrast_and_brightness(&mut luminance, options.contrast, options.brightness);
@@ -106,14 +111,31 @@ impl AsciiRenderer {
 
         let mut mapper = GlyphMapper::new(options.gradient.clone());
 
-        let grid = match map {
-            edges::EdgeResult::Intensity(mut intensities) => {
+        let mut grid = match map {
+            edges::EdgeResult::Intensity(intensities) => {
                 mapper.map_intensity(&intensities, geometry.columns, geometry.rows)
             },
             edges::EdgeResult::Orientation(samples) => {
                 mapper.map_orientation(&samples, geometry.columns, geometry.rows)
             },
         };
+
+        let pixel_count = pixel_data.len() / 4;
+        if pixel_count == grid.cells.len() {
+            for (idx, cell) in grid.cells.iter_mut().enumerate() {
+                let start = idx * 4;
+                let r = pixel_data[start];
+                let g = pixel_data[start + 1];
+                let b = pixel_data[start + 2];
+                let alpha = (pixel_data[start + 3] as f32 / 255.0).clamp(0.0, 1.0);
+
+                cell.fg = [r, g, b];
+                cell.alpha = alpha;
+                if alpha <= TRANSPARENT_ALPHA_THRESHOLD {
+                    cell.ch = ' ';
+                }
+            }
+        }
 
         Ok(RenderOutput { grid, geometry, assumed_font_aspect: options.font_aspect })
     }

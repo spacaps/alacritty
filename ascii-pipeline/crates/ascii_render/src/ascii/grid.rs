@@ -34,3 +34,48 @@ impl GlyphGrid {
         self.cells.chunks(width).map(|row| row.iter().map(|cell| cell.ch).collect::<String>())
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct GlyphFrameSeries {
+    pub width: u16,
+    pub height: u16,
+    pub frame_count: usize,
+    pub frame_stride: usize,
+    pub cells: Vec<CellGlyph>,
+}
+
+impl GlyphFrameSeries {
+    pub fn new(width: u16, height: u16, frame_count: usize, cells: Vec<CellGlyph>) -> Self {
+        let frame_stride = usize::from(width) * usize::from(height);
+        let expected_len = frame_stride.saturating_mul(frame_count);
+        assert_eq!(expected_len, cells.len());
+
+        Self { width, height, frame_count, frame_stride, cells }
+    }
+
+    #[inline]
+    pub fn frame_count(&self) -> usize {
+        self.frame_count
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.frame_count == 0 || self.frame_stride == 0 || self.cells.is_empty()
+    }
+
+    #[inline]
+    pub fn frame(&self, index: usize) -> Option<&[CellGlyph]> {
+        if index >= self.frame_count {
+            return None;
+        }
+
+        let start = index * self.frame_stride;
+        let end = start + self.frame_stride;
+        Some(&self.cells[start..end])
+    }
+
+    #[inline]
+    pub fn frames(&self) -> impl Iterator<Item = &[CellGlyph]> {
+        (0..self.frame_count).filter_map(|index| self.frame(index))
+    }
+}

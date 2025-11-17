@@ -24,6 +24,8 @@ _alacritty() {
 '-T+[Defines the window title \[default\: Alacritty\]]:TITLE:_default' \
 '--title=[Defines the window title \[default\: Alacritty\]]:TITLE:_default' \
 '--class=[Defines window class/app_id on X11/Wayland \[default\: Alacritty\]]:general> | <general>,<instance:_default' \
+'--background-animation=[Path to an image/GIF or directory of frames used for the ASCII background animation]:PATH:_files' \
+'--background-animation-mode=[Glyph encoding strategy for the animation]:MODE:(luminance color)' \
 '*-o+[Override configuration file options \[example\: '\''cursor.style="Beam"'\''\]]:OPTION:_default' \
 '*--option=[Override configuration file options \[example\: '\''cursor.style="Beam"'\''\]]:OPTION:_default' \
 '--print-events[Print all events to STDOUT]' \
@@ -69,6 +71,8 @@ _arguments "${_arguments_options[@]}" : \
 '-T+[Defines the window title \[default\: Alacritty\]]:TITLE:_default' \
 '--title=[Defines the window title \[default\: Alacritty\]]:TITLE:_default' \
 '--class=[Defines window class/app_id on X11/Wayland \[default\: Alacritty\]]:general> | <general>,<instance:_default' \
+'--background-animation=[Path to an image/GIF or directory of frames used for the ASCII background animation]:PATH:_files' \
+'--background-animation-mode=[Glyph encoding strategy for the animation]:MODE:(luminance color)' \
 '*-o+[Override configuration file options \[example\: '\''cursor.style="Beam"'\''\]]:OPTION:_default' \
 '*--option=[Override configuration file options \[example\: '\''cursor.style="Beam"'\''\]]:OPTION:_default' \
 '--hold[Remain open after child process exit]' \

@@ -7,6 +7,12 @@ use image::{DynamicImage, GenericImageView};
 
 const TRANSPARENT_ALPHA_THRESHOLD: f32 = 0.001;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ColorMode {
+    Luminance,
+    ColorAlpha,
+}
+
 pub use ascii::{
     gradient::Gradient,
     grid::{CellGlyph, GlyphFrameSeries, GlyphGrid},
@@ -15,7 +21,6 @@ pub use ascii::{
 };
 pub use image_pipeline::{
     edges::{EdgeMode, EdgeSample},
-    loader::FrameSource,
     resize::{LayoutPolicy, TargetGeometry},
 };
 
@@ -39,8 +44,10 @@ pub struct AsciiOptions {
     pub contrast: f32,
     /// Font aspect ratio (height / width) assumed when deriving grid size.
     pub font_aspect: f32,
-    /// Edge extraction mode.
+    /// Sobel edge detection mode, or None
     pub edge_mode: EdgeMode,
+    /// color: char gradient is alpha, luminance: char gradient is luminance
+    pub color_mode: ColorMode,
 }
 
 impl Default for AsciiOptions {
@@ -51,7 +58,8 @@ impl Default for AsciiOptions {
             brightness: 0.0,
             contrast: 0.0,
             font_aspect: 0.55,
-            edge_mode: EdgeMode::Sobel { threshold: 0.1 },
+            edge_mode: EdgeMode::None,
+            color_mode: ColorMode::Luminance,
         }
     }
 }

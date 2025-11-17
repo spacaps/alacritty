@@ -30,11 +30,13 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::tty;
 
-use crate::cli::{ParsedOptions, WindowOptions};
+use ascii_render::ColorMode;
+
+use crate::cli::{BackgroundAnimationMode, ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
-use crate::display::Display;
 use crate::display::window::Window;
+use crate::display::{BackgroundAnimationConfig, Display};
 use crate::event::{
     ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TouchPurpose,
 };
@@ -113,7 +115,15 @@ impl WindowContext {
         let gl_context =
             renderer::platform::create_gl_context(&gl_display, &gl_config, raw_window_handle)?;
 
-        let display = Display::new(window, gl_context, &config, false)?;
+        let background_animation = options.background_animation.path.clone().map(|path| {
+            let color_mode = match options.background_animation.mode {
+                BackgroundAnimationMode::Luminance => ColorMode::Luminance,
+                BackgroundAnimationMode::Color => ColorMode::ColorAlpha,
+            };
+            BackgroundAnimationConfig { path, color_mode }
+        });
+
+        let display = Display::new(window, gl_context, &config, false, background_animation)?;
 
         Self::new(display, config, options, proxy)
     }
@@ -153,7 +163,15 @@ impl WindowContext {
         let gl_context =
             renderer::platform::create_gl_context(&gl_display, gl_config, Some(raw_window_handle))?;
 
-        let display = Display::new(window, gl_context, &config, tabbed)?;
+        let background_animation = options.background_animation.path.clone().map(|path| {
+            let color_mode = match options.background_animation.mode {
+                BackgroundAnimationMode::Luminance => ColorMode::Luminance,
+                BackgroundAnimationMode::Color => ColorMode::ColorAlpha,
+            };
+            BackgroundAnimationConfig { path, color_mode }
+        });
+
+        let display = Display::new(window, gl_context, &config, tabbed, background_animation)?;
 
         let mut window_context = Self::new(display, config, options, proxy)?;
 
@@ -395,7 +413,7 @@ impl WindowContext {
             &self.config,
             &mut self.search_state,
         );
-        
+
         if animation_active {
             if self.display.is_wayland() {
                 self.display.window.request_redraw();

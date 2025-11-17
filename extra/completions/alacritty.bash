@@ -74,7 +74,7 @@ _alacritty() {
 
     case "${cmd}" in
         alacritty)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --config-file --socket --daemon --working-directory --hold --command --title --class --option --help --version msg migrate help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --config-file --socket --daemon --working-directory --hold --command --title --class --background-animation --background-animation-mode --option --help --version msg migrate help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -147,6 +147,14 @@ _alacritty() {
                     ;;
                 --class)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --background-animation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --background-animation-mode)
+                    COMPREPLY=($(compgen -W "luminance color" -- "${cur}"))
                     return 0
                     ;;
                 --option)
@@ -373,7 +381,7 @@ _alacritty() {
             return 0
             ;;
         alacritty__msg__create__window)
-            opts="-e -T -o -h --working-directory --hold --command --title --class --option --help"
+            opts="-e -T -o -h --working-directory --hold --command --title --class --background-animation --background-animation-mode --option --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -412,6 +420,14 @@ _alacritty() {
                     ;;
                 --class)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --background-animation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --background-animation-mode)
+                    COMPREPLY=($(compgen -W "luminance color" -- "${cur}"))
                     return 0
                     ;;
                 --option)

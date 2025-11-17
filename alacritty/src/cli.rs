@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use alacritty_config::SerdeReplace;
-use clap::{ArgAction, Args, Parser, Subcommand, ValueHint};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum, ValueHint};
 use log::{LevelFilter, error};
 use serde::{Deserialize, Serialize};
 use toml::Value;
@@ -300,6 +300,10 @@ pub struct WindowOptions {
     /// Window options which could be passed via IPC.
     pub window_identity: WindowIdentity,
 
+    #[clap(flatten)]
+    /// Background animation settings.
+    pub background_animation: BackgroundAnimationOptions,
+
     #[clap(skip)]
     #[cfg(target_os = "macos")]
     /// The window tabbing identifier to use when building a window.
@@ -320,6 +324,29 @@ impl WindowOptions {
     pub fn config_overrides(&self) -> ParsedOptions {
         ParsedOptions::from_options(&self.option)
     }
+}
+
+#[derive(Serialize, Deserialize, Args, Clone, Debug, PartialEq, Eq)]
+pub struct BackgroundAnimationOptions {
+    /// Path to an image/GIF or directory of frames used for the ASCII background animation.
+    #[clap(long = "background-animation", value_hint = ValueHint::AnyPath)]
+    pub path: Option<PathBuf>,
+
+    /// Glyph encoding strategy for the animation.
+    #[clap(long = "background-animation-mode", value_enum, default_value = "color")]
+    pub mode: BackgroundAnimationMode,
+}
+
+impl Default for BackgroundAnimationOptions {
+    fn default() -> Self {
+        Self { path: None, mode: BackgroundAnimationMode::Color }
+    }
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum BackgroundAnimationMode {
+    Luminance,
+    Color,
 }
 
 /// Parameters to the `config` IPC subcommand.

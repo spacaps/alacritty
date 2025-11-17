@@ -1,6 +1,6 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::Dimensions;
@@ -8,11 +8,13 @@ use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::NamedColor;
 
-use ascii_render::{AsciiOptions, AsciiRenderer, CellGlyph, GlyphFrameSeries, LayoutPolicy};
+use ascii_render::{
+    AsciiOptions, AsciiRenderer, CellGlyph, ColorMode, GlyphFrameSeries, LayoutPolicy,
+};
 
 use image::codecs::gif::GifDecoder;
-use image::{AnimationDecoder, DynamicImage};
-use log::warn;
+use image::{AnimationDecoder, DynamicImage, GenericImageView};
+use log::{debug, warn};
 
 use crate::display::SizeInfo;
 use crate::display::color::{List, Rgb};
@@ -21,62 +23,15 @@ use crate::display::content::RenderableCell;
 const ADVANCE_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Debug)]
+pub struct BackgroundAnimationConfig {
+    pub path: PathBuf,
+    pub color_mode: ColorMode,
+}
+
+#[derive(Clone, Debug)]
 struct BackgroundFrame {
     image: DynamicImage,
     delay: Duration,
-}
-
-struct SampleGifLoader;
-
-impl SampleGifLoader {
-    fn frames() -> Arc<Vec<BackgroundFrame>> {
-        static CACHE: OnceLock<Arc<Vec<BackgroundFrame>>> = OnceLock::new();
-        CACHE.get_or_init(|| Arc::new(Self::load_frames())).clone()
-    }
-
-    fn load_frames() -> Vec<BackgroundFrame> {
-        let path = Self::sample_path();
-
-        let file = match File::open(&path) {
-            Ok(file) => file,
-            Err(err) => {
-                warn!("failed to open background GIF at {}: {err}", path.display());
-                return Vec::new();
-            },
-        };
-
-        let decoder = match GifDecoder::new(file) {
-            Ok(decoder) => decoder,
-            Err(err) => {
-                warn!("failed to decode background GIF at {}: {err}", path.display());
-                return Vec::new();
-            },
-        };
-
-        match decoder.into_frames().collect_frames() {
-            Ok(frames) => frames
-                .into_iter()
-                .map(|frame| {
-                    let delay = Duration::from(frame.delay());
-                    let buffer = frame.into_buffer();
-                    let (w, h) = buffer.dimensions();
-                    println!("frame dimensions: {}x{}", w, h);
-                    let image = DynamicImage::ImageRgba8(buffer);
-                    BackgroundFrame { image, delay }
-                })
-                .collect(),
-            Err(err) => {
-                warn!("failed to collect frames from background GIF at {}: {err}", path.display());
-                Vec::new()
-            },
-        }
-    }
-
-    fn sample_path() -> PathBuf {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let project_root = manifest_dir.parent().unwrap_or(manifest_dir);
-        project_root.join("sample.gif")
-    }
 }
 
 /// State driving a simple background glyph animation.
@@ -88,30 +43,62 @@ pub struct BackgroundAnimation {
     needs_full_redraw: bool,
     source_frames: Arc<Vec<BackgroundFrame>>,
     frame_delays: Vec<Duration>,
+    color_mode: ColorMode,
 }
 
 impl BackgroundAnimation {
-    pub fn new(size: &SizeInfo) -> Self {
-        let source_frames = SampleGifLoader::frames();
-        let (volume, frame_delays) = Self::create_volume(size, &source_frames);
+    pub fn new(size: &SizeInfo, config: BackgroundAnimationConfig) -> Option<Self> {
+        let frames = match load_frames(&config.path) {
+            Ok(frames) => frames,
+            Err(err) => {
+                warn!("failed to load background animation {}: {err}", config.path.display());
+                return None;
+            },
+        };
 
-        Self {
+        if frames.is_empty() {
+            warn!("background animation {} contained no frames", config.path.display());
+            return None;
+        }
+
+        let source_frames = Arc::new(frames);
+        let (volume, frame_delays) =
+            match Self::create_volume(size, &source_frames, config.color_mode) {
+                Some(result) => result,
+                None => {
+                    warn!(
+                        "background animation {} produced no renderable frames",
+                        config.path.display()
+                    );
+                    return None;
+                },
+            };
+
+        Some(Self {
             volume,
             current_frame_index: 0,
             last_update: Instant::now(),
             needs_full_redraw: true,
             source_frames,
             frame_delays,
-        }
+            color_mode: config.color_mode,
+        })
     }
 
     pub fn on_resize(&mut self, size: &SizeInfo) {
-        let (volume, frame_delays) = Self::create_volume(size, &self.source_frames);
-        self.volume = volume;
-        self.frame_delays = frame_delays;
+        if let Some((volume, frame_delays)) =
+            Self::create_volume(size, &self.source_frames, self.color_mode)
+        {
+            self.volume = volume;
+            self.frame_delays = frame_delays;
+        } else {
+            self.volume = GlyphFrameSeries::new(0, 0, 0, Vec::new());
+            self.frame_delays.clear();
+        }
+
         self.current_frame_index = 0;
         self.last_update = Instant::now();
-        self.needs_full_redraw = true;
+        self.needs_full_redraw = true; // TODO: optimize redraws
     }
 
     pub fn update(&mut self, now: Instant, size: &SizeInfo) -> bool {
@@ -209,18 +196,19 @@ impl BackgroundAnimation {
     fn create_volume(
         size: &SizeInfo,
         frames: &[BackgroundFrame],
-    ) -> (GlyphFrameSeries, Vec<Duration>) {
-        let empty_series = GlyphFrameSeries::new(0, 0, 0, Vec::new());
+        color_mode: ColorMode,
+    ) -> Option<(GlyphFrameSeries, Vec<Duration>)> {
         if frames.is_empty() {
-            return (empty_series, Vec::new());
+            return None;
         }
 
         let columns_limit = size.columns().min(u16::MAX as usize) as u16;
         let rows_limit = size.screen_lines().min(u16::MAX as usize) as u16;
 
         if columns_limit == 0 || rows_limit == 0 {
-            return (empty_series, Vec::new());
+            return None;
         }
+
         let cell_width = size.cell_width();
         let cell_height = size.cell_height();
         let cell_aspect = if cell_width > f32::EPSILON { cell_width / cell_height } else { 1.0 };
@@ -229,7 +217,8 @@ impl BackgroundAnimation {
             LayoutPolicy::FitViewport { columns: columns_limit, rows: rows_limit, cell_aspect };
 
         let renderer = AsciiRenderer::default();
-        let options = AsciiOptions::default();
+        let mut options = AsciiOptions::default();
+        options.color_mode = color_mode; //TODO: use mode from config
 
         let mut frame_dimensions: Option<(u16, u16)> = None;
         let mut delays = Vec::with_capacity(frames.len());
@@ -258,31 +247,29 @@ impl BackgroundAnimation {
                         frame_dimensions = Some((width, height));
                         let frame_stride = usize::from(width) * usize::from(height);
                         if frame_stride > 0 {
-                            cells.reserve(frame_stride * frames.len());
+                            cells.reserve(frame_stride.saturating_mul(frames.len()));
                         }
                     }
 
                     delays.push(frame.delay);
                     cells.extend(grid.cells);
                 },
-                Err(err) => {
-                    warn!("failed to render GIF frame to ASCII: {err}");
-                },
+                Err(err) => warn!("failed to render GIF frame to ASCII: {err}"),
             }
         }
 
         let Some((frame_width, frame_height)) = frame_dimensions else {
-            return (empty_series, Vec::new());
+            return None;
         };
 
         let frame_count = delays.len();
         if frame_count == 0 {
-            return (empty_series, Vec::new());
+            return None;
         }
 
         let frame_stride = usize::from(frame_width) * usize::from(frame_height);
         if frame_stride == 0 {
-            return (empty_series, Vec::new());
+            return None;
         }
 
         let expected_len = frame_stride * frame_count;
@@ -292,10 +279,10 @@ impl BackgroundAnimation {
                 expected_len,
                 cells.len()
             );
-            return (empty_series, Vec::new());
+            return None;
         }
 
-        (GlyphFrameSeries::new(frame_width, frame_height, frame_count, cells), delays)
+        Some((GlyphFrameSeries::new(frame_width, frame_height, frame_count, cells), delays))
     }
 
     fn current_frame_delay(&self) -> Duration {
@@ -307,4 +294,43 @@ impl BackgroundAnimation {
         let delay = self.frame_delays[index];
         if delay.is_zero() { ADVANCE_INTERVAL } else { delay }
     }
+}
+
+fn load_frames(path: &Path) -> Result<Vec<BackgroundFrame>, String> {
+    match path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_ascii_lowercase()) {
+        Some(ext) if ext == "gif" => load_frames_from_gif(path),
+        _ => load_frames_from_image(path),
+    }
+    
+}
+
+fn load_frames_from_gif(path: &Path) -> Result<Vec<BackgroundFrame>, String> {
+    let file =
+        File::open(path).map_err(|err| format!("failed to open gif {}: {err}", path.display()))?;
+    let decoder = GifDecoder::new(file)
+        .map_err(|err| format!("failed to decode gif {}: {err}", path.display()))?;
+    let frames = decoder
+        .into_frames()
+        .collect_frames()
+        .map_err(|err| format!("failed to collect frames from {}: {err}", path.display()))?;
+
+    let mut result = Vec::with_capacity(frames.len());
+    for frame in frames {
+        let delay = Duration::from(frame.delay());
+        let buffer = frame.into_buffer();
+        let (w, h) = buffer.dimensions();
+        debug!("loaded background frame {}x{} from {}", w, h, path.display());
+        let image = DynamicImage::ImageRgba8(buffer);
+        result.push(BackgroundFrame { image, delay });
+    }
+
+    Ok(result)
+}
+
+fn load_frames_from_image(path: &Path) -> Result<Vec<BackgroundFrame>, String> {
+    let image = image::open(path)
+        .map_err(|err| format!("failed to open image {}: {err}", path.display()))?;
+    let (w, h) = image.dimensions();
+    debug!("loaded background image {}x{} from {}", w, h, path.display());
+    Ok(vec![BackgroundFrame { image, delay: ADVANCE_INTERVAL }])
 }

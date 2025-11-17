@@ -42,10 +42,10 @@ use crate::config::font::Font;
 use crate::config::window::Dimensions;
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
+use crate::display::background::BackgroundAnimation;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
-use crate::display::background::BackgroundAnimation;
-use crate::display::content::{RenderableContent, RenderableCursor};
+use crate::display::content::{RenderableCell, RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
 use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
 use crate::display::hint::{HintMatch, HintState};
@@ -63,6 +63,8 @@ pub mod content;
 pub mod cursor;
 pub mod hint;
 pub mod window;
+
+pub use self::background::BackgroundAnimationConfig;
 
 mod background;
 mod bell;
@@ -366,7 +368,7 @@ pub struct Display {
     /// Mapped RGB values for each terminal color.
     pub colors: List,
 
-    background_animation: BackgroundAnimation,
+    background_animation: Option<BackgroundAnimation>,
     /// State of the keyboard hints.
     pub hint_state: HintState,
 
@@ -408,6 +410,7 @@ impl Display {
         gl_context: NotCurrentContext,
         config: &UiConfig,
         _tabbed: bool,
+        background: Option<BackgroundAnimationConfig>,
     ) -> Result<Display, Error> {
         let raw_window_handle = window.raw_window_handle();
 
@@ -517,6 +520,9 @@ impl Display {
             info!("Failed to disable vsync: {err}");
         }
 
+        let background_animation =
+            background.and_then(|config| BackgroundAnimation::new(&size_info, config));
+
         Ok(Self {
             context: ManuallyDrop::new(context),
             visual_bell: VisualBell::from(&config.bell),
@@ -524,7 +530,7 @@ impl Display {
             renderer_preference: config.debug.renderer,
             surface: ManuallyDrop::new(surface),
             colors: List::from(&config.colors),
-            background_animation: BackgroundAnimation::new(&size_info),
+            background_animation,
             frame_timer: FrameTimer::new(),
             raw_window_handle,
             damage_tracker,
@@ -743,7 +749,9 @@ impl Display {
             search_state.clear_focused_match();
         }
         self.size_info = new_size;
-        self.background_animation.on_resize(&self.size_info);
+        if let Some(animation) = self.background_animation.as_mut() {
+            animation.on_resize(&self.size_info);
+        }
     }
 
     // NOTE: Renderer updates are split off, since platforms like Wayland require resize and other
@@ -808,17 +816,16 @@ impl Display {
         let size_info = self.size_info;
         let now = Instant::now();
         let mut background_cells = Vec::new();
-        let mut animation_active = self.background_animation.is_active(&self.size_info);
-        if self.background_animation.update(now, &self.size_info) {
-            self.damage_tracker.frame().mark_fully_damaged();
-            animation_active = true;
+        let mut animation_active = false;
+        if let Some(animation) = self.background_animation.as_mut() {
+            animation_active = animation.is_active(&self.size_info);
+            if animation.update(now, &self.size_info) {
+                self.damage_tracker.frame().mark_fully_damaged();
+                animation_active = true;
+            }
+            animation.render_cells(&self.colors, &self.size_info, &mut background_cells);
+            animation_active |= !background_cells.is_empty();
         }
-        self.background_animation.render_cells(
-            &self.colors,
-            &self.size_info,
-            &mut background_cells,
-        );
-        animation_active |= !background_cells.is_empty();
 
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
@@ -878,26 +885,31 @@ impl Display {
             let vi_highlighted_hint = &self.vi_highlighted_hint;
             let damage_tracker = &mut self.damage_tracker;
 
-            let mut render_cells = Vec::with_capacity(grid_cells.len() + background_cells.len());
-            render_cells.extend(background_cells.into_iter());
-
-            for mut cell in grid_cells {
-                if has_highlighted_hint {
-                    let point = term::viewport_to_point(display_offset, cell.point);
-                    let hyperlink = cell.extra.as_ref().and_then(|extra| extra.hyperlink.as_ref());
-
-                    let should_highlight = |hint: &Option<HintMatch>| {
-                        hint.as_ref().is_some_and(|hint| hint.should_highlight(point, hyperlink))
-                    };
-                    if should_highlight(highlighted_hint) || should_highlight(vi_highlighted_hint) {
-                        damage_tracker.frame().damage_point(cell.point);
-                        cell.flags.insert(Flags::UNDERLINE);
+            if background_cells.is_empty() {
+                let cells = grid_cells.into_iter().map(|mut cell| {
+                    if has_highlighted_hint {
+                        Self::highlight_cell(damage_tracker, display_offset, &mut cell, highlighted_hint, vi_highlighted_hint);
                     }
+
+                    lines.update(&cell);
+                    cell
+                });
+                self.renderer.draw_cells(&size_info, glyph_cache, cells);
+
+            } else {
+                let mut render_cells = background_cells;
+                render_cells.reserve(grid_cells.len());
+                for mut cell in grid_cells {
+                    if has_highlighted_hint {
+                        Self::highlight_cell(damage_tracker, display_offset, &mut cell, highlighted_hint, vi_highlighted_hint);
+                    }
+
+                    lines.update(&cell);
+                    render_cells.push(cell);
                 }
 
-                render_cells.push(cell);
+                self.renderer.draw_cells(&size_info, glyph_cache, render_cells.into_iter());
             }
-            self.renderer.draw_cells(&size_info, glyph_cache, render_cells.into_iter());
         }
 
         let mut rects = lines.rects(&metrics, &size_info);
@@ -1069,6 +1081,22 @@ impl Display {
         animation_active
     }
 
+    fn highlight_cell(damage_tracker: &mut DamageTracker, display_offset: usize, cell: &mut RenderableCell, highlighted_hint: &Option<HintMatch>, vi_highlighted_hint: &Option<HintMatch>) {
+        let point = term::viewport_to_point(display_offset, cell.point);
+        let hyperlink =
+            cell.extra.as_ref().and_then(|extra| extra.hyperlink.as_ref());
+
+        let should_highlight = |hint: &Option<HintMatch>| {
+            hint.as_ref()
+                .is_some_and(|hint| hint.should_highlight(point, hyperlink))
+        };
+        if should_highlight(highlighted_hint)
+            || should_highlight(vi_highlighted_hint)
+        {
+            damage_tracker.frame().damage_point(cell.point);
+            cell.flags.insert(Flags::UNDERLINE);
+        }
+    }
     /// Update to a new configuration.
     pub fn update_config(&mut self, config: &UiConfig) {
         self.damage_tracker.debug = config.debug.highlight_damage;
